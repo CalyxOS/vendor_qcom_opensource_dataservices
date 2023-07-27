@@ -9,7 +9,10 @@ cc_defaults {
     cflags: [
         "-Wall",
         "-Werror",
-    ],
+    ] + select(soong_config_variable("rmnetctl", "old_rmnet_data"), {
+        "true": ["-DUSE_OLD_RMNET_DATA"],
+        default: [],
+    }),
     header_libs: ["librmnetctl_headers"],
     vendor: true,
 }
