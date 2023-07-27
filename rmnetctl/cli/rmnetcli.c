@@ -58,11 +58,19 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define RMNET_MAX_STR_LEN  16
 
+#ifdef USE_OLD_RMNET_DATA
+#define _RMNETCLI_CHECKNULL(X)		do { if (!X) {                         \
+print_rmnet_api_status(RMNETCTL_INVALID_ARG, RMNETCTL_CFG_FAILURE_NO_COMMAND); \
+				rmnetctl_cleanup(handle);                      \
+				return RMNETCTL_INVALID_ARG;                   \
+		} } while (0);
+#else
 #define _RMNETCLI_CHECKNULL(X)		do { if (!X) {                         \
 print_rmnet_api_status(RMNETCTL_INVALID_ARG, RMNETCTL_CFG_FAILURE_NO_COMMAND); \
 				rtrmnet_ctl_deinit(handle);                      \
 				return RMNETCTL_INVALID_ARG;                   \
 		} } while (0);
+#endif
 #define _STRTOUI32(X)           (uint32_t)strtoul(X, NULL, 0)
 #define _STRTOUI16(X)           (uint16_t)strtoul(X, NULL, 0)
 #define _STRTOUI8(X)           (uint8_t)strtoul(X, NULL, 0)
@@ -246,6 +254,9 @@ static int rmnet_api_call(int argc, char *argv[])
 	struct rmnetctl_hndl_s *handle = NULL;
 	uint16_t error_number = RMNETCTL_CFG_FAILURE_NO_COMMAND;
 	int return_code = RMNETCTL_LIB_ERR;
+#ifdef USE_OLD_RMNET_DATA
+	int is_new_api = 0;
+#endif
 
 	if ((!argc) || (!*argv)) {
 		print_rmnet_api_status(RMNETCTL_LIB_ERR,
@@ -259,6 +270,9 @@ static int rmnet_api_call(int argc, char *argv[])
 	}
 
 	if (!strcmp(*argv, "-n")) {
+#ifdef USE_OLD_RMNET_DATA
+		is_new_api = 1;
+#endif
 		return_code = rtrmnet_ctl_init(&handle, &error_number);
 		if (return_code != RMNETCTL_SUCCESS) {
 			print_rmnet_api_status(return_code, error_number);
@@ -454,7 +468,11 @@ static int rmnet_api_call(int argc, char *argv[])
 			if (!bearers) {
 				print_rmnet_api_status(RMNETCTL_INVALID_ARG,
 					RMNETCTL_CFG_FAILURE_NO_COMMAND);
+#ifdef USE_OLD_RMNET_DATA
+				rmnetctl_cleanup(handle);
+#else
 				rtrmnet_ctl_deinit(handle);
+#endif
 				return RMNETCTL_INVALID_ARG;
 			}
 
@@ -480,11 +498,147 @@ static int rmnet_api_call(int argc, char *argv[])
 
 
 		goto end;
+#ifdef USE_OLD_RMNET_DATA
+	} else {
+		return_code = rmnetctl_init(&handle, &error_number);
+		if (return_code != RMNETCTL_SUCCESS) {
+			print_rmnet_api_status(return_code, error_number);
+			return RMNETCTL_LIB_ERR;
+		}
+
+	}
+	error_number = RMNETCTL_CFG_FAILURE_NO_COMMAND;
+	return_code = RMNETCTL_LIB_ERR;
+	if (!strcmp(*argv, "assocnetdev")) {
+		return_code = rmnet_associate_network_device(handle,
+		argv[1], &error_number, RMNETCTL_DEVICE_ASSOCIATE);
+	} else if (!strcmp(*argv, "unassocnetdev")) {
+		return_code = rmnet_associate_network_device(handle,
+		argv[1], &error_number, RMNETCTL_DEVICE_UNASSOCIATE);
+	} else if (!strcmp(*argv, "getnetdevassoc")) {
+		int register_status;
+		return_code = rmnet_get_network_device_associated(handle,
+		argv[1], &register_status, &error_number);
+		if (return_code == RMNETCTL_SUCCESS)
+			printf("register_status is %d\n", register_status);
+	} else if (!strcmp(*argv, "getledf")) {
+		uint32_t egress_flags;
+		uint16_t agg_size, agg_count;
+		return_code = rmnet_get_link_egress_data_format(handle,
+		argv[1], &egress_flags, &agg_size, &agg_count, &error_number);
+		if (return_code == RMNETCTL_SUCCESS) {
+			printf("egress_flags is %u\n", egress_flags);
+			printf("agg_size is %u\n", agg_size);
+			printf("agg_count is %u\n", agg_count);
+		}
+	} else if (!strcmp(*argv, "getlidf")) {
+		uint32_t ingress_flags;
+		uint8_t  tail_spacing;
+		return_code = rmnet_get_link_ingress_data_format_tailspace(
+		handle, argv[1], &ingress_flags, &tail_spacing, &error_number);
+		if (return_code == RMNETCTL_SUCCESS) {
+			printf("ingress_flags is %u\n", ingress_flags);
+			printf("tail_spacing is %u\n", tail_spacing);
+		}
+	} else if (!strcmp(*argv, "newvndprefix")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		return_code = rmnet_new_vnd_prefix(handle,
+		_STRTOUI32(argv[1]), &error_number, RMNETCTL_NEW_VND, argv[2]);
+	} else if (!strcmp(*argv, "newvndname")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		return_code = rmnet_new_vnd_name(handle,
+		_STRTOUI32(argv[1]), &error_number, argv[2]);
+	} else if (!strcmp(*argv, "newvnd")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		return_code = rmnet_new_vnd(handle,
+		_STRTOUI32(argv[1]), &error_number, RMNETCTL_NEW_VND);
+	} else if (!strcmp(*argv, "getvndname")) {
+		char buffer[32];
+		memset(buffer, 0, 32);
+		_RMNETCLI_CHECKNULL(argv[1]);
+		return_code = rmnet_get_vnd_name(handle, _STRTOUI32(argv[1]),
+			           &error_number, buffer, 32);
+		if (return_code == RMNETCTL_SUCCESS) {
+			printf("VND name: %s\n", buffer);
+		}
+	} else if (!strcmp(*argv, "freevnd")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		return_code = rmnet_new_vnd(handle,
+		_STRTOUI32(argv[1]), &error_number, RMNETCTL_FREE_VND);
+	} else if (!strcmp(*argv, "setlidf")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		_RMNETCLI_CHECKNULL(argv[3]);
+		return_code = rmnet_set_link_ingress_data_format_tailspace(
+		handle, _STRTOUI32(argv[1]), _STRTOUI8(argv[2]), argv[3],
+		&error_number);
+	} else if (!strcmp(*argv, "delvnctcflow")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		_RMNETCLI_CHECKNULL(argv[3]);
+		return_code = rmnet_add_del_vnd_tc_flow(handle,
+		_STRTOUI32(argv[1]), _STRTOUI32(argv[2]), _STRTOUI32(argv[3]),
+		RMNETCTL_DEL_FLOW, &error_number);
+	} else if (!strcmp(*argv, "getlepc")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		uint8_t rmnet_mode;
+		char *egress_dev_name;
+		egress_dev_name = NULL;
+		egress_dev_name = (char *)malloc(RMNET_MAX_STR_LEN
+		* sizeof(char));
+		if (!egress_dev_name) {
+			print_rmnet_api_status(RMNETCTL_LIB_ERR,
+			RMNETCTL_CFG_FAILURE_EGRESS_DEV_NAME_NULL);
+			rmnetctl_cleanup(handle);
+			return RMNETCTL_LIB_ERR;
+		}
+		return_code = rmnet_get_logical_ep_config(handle,
+		_STRTOI32(argv[1]), argv[2], &rmnet_mode,
+		&egress_dev_name, RMNET_MAX_STR_LEN, &error_number);
+		if (return_code == RMNETCTL_SUCCESS) {
+			printf("rmnet_mode is %u\n", rmnet_mode);
+			printf("egress_dev_name is %s\n", egress_dev_name);
+		}
+		free(egress_dev_name);
+	} else if (!strcmp(*argv, "addvnctcflow")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		_RMNETCLI_CHECKNULL(argv[3]);
+		return_code = rmnet_add_del_vnd_tc_flow(handle,
+		_STRTOUI32(argv[1]), _STRTOUI32(argv[2]), _STRTOUI32(argv[3]),
+		RMNETCTL_ADD_FLOW, &error_number);
+	} else if (!strcmp(*argv, "setledf")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		_RMNETCLI_CHECKNULL(argv[3]);
+		return_code = rmnet_set_link_egress_data_format(handle,
+		_STRTOUI32(argv[1]), _STRTOUI16(argv[2]), _STRTOUI16(argv[3]),
+		argv[4], &error_number);
+	} else if (!strcmp(*argv, "setlepc")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		_RMNETCLI_CHECKNULL(argv[2]);
+		return_code = rmnet_set_logical_ep_config(handle,
+		_STRTOI32(argv[1]), _STRTOUI8(argv[2]), argv[3], argv[4],
+		&error_number);
+	} else if (!strcmp(*argv, "unsetlepc")) {
+		_RMNETCLI_CHECKNULL(argv[1]);
+		return_code = rmnet_unset_logical_ep_config(handle,
+		_STRTOI32(argv[1]), argv[2], &error_number);
+#endif
 	}
 
 end:
 	print_rmnet_api_status(return_code, error_number);
+#ifdef USE_OLD_RMNET_DATA
+	if (is_new_api)
+		rtrmnet_ctl_deinit(handle);
+	else
+		rmnetctl_cleanup(handle);
+#else
 	rtrmnet_ctl_deinit(handle);
+#endif
 
 	return return_code;
 }
