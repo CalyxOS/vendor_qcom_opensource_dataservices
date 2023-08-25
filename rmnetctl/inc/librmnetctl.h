@@ -201,6 +201,7 @@ struct rmnetctl_ll_ack
 ===========================================================================*/
 typedef struct rmnetctl_hndl_s rmnetctl_hndl_t;
 
+#ifdef USE_OLD_RMNET_DATA
 /*!
 * @brief Public API to initialize the RMNET control driver
 * @details Allocates memory for the RmNet handle. Creates and binds to a   and
@@ -544,6 +545,7 @@ int rmnet_add_del_vnd_tc_flow(rmnetctl_hndl_t *hndl,
 			      uint32_t tc_flow_id,
 			      uint8_t set_flow,
 			      uint16_t *error_code);
+#endif
 
 /* @brief Public API to initialize the RTM_NETLINK RMNET control driver
  * @details Allocates memory for the RmNet handle. Creates and binds to a
