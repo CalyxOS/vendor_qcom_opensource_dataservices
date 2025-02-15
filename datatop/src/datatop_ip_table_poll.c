@@ -150,7 +150,7 @@ void dtop_ip_table_register(struct dtop_data_point_gatherer *dpg)
  *
  * @param None
  */
-int dtop_ip_table_init_files()
+int dtop_ip_table_init_files(void)
 {
   struct dtop_data_point_gatherer *dpset;
   struct dtop_linked_list *curr_ptr = ip_dpg_list;
@@ -176,7 +176,7 @@ int dtop_ip_table_init_files()
  *
  * @param None
  */
-void dtop_ip_table_poll_cleanup()
+void dtop_ip_table_poll_cleanup(void)
 {
   pthread_mutex_lock(&dtop_ip_table_lock);
   deconstruct_dpgs(ip_dpg_list);
