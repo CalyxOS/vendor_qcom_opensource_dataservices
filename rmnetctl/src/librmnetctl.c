@@ -118,16 +118,16 @@ enum {
 	RMNETCTL_IFLA_DFC_QOS,
 	RMNETCTL_IFLA_UPLINK_PARAMS,
 	RMNETCTL_IFLA_UPLINK_STATE_ID,
+	RMNETCTL_IFLA_RMNET_QUEUE,
 	__RMNETCTL_IFLA_MAX,
 };
 
-/* Flow message types sent to DFC driver */
+/* Flow message types sent to DFC driver and queue operations */
 enum {
 	/* Activate flow */
 	RMNET_FLOW_MSG_ACTIVATE = 1,
 	/* Delete flow */
 	RMNET_FLOW_MSG_DEACTIVATE = 2,
-	/* Legacy flow control */
 	RMNET_FLOW_MSG_CONTROL = 3,
 	/* Flow up */
 	RMNET_FLOW_MSG_UP = 4,
@@ -139,6 +139,23 @@ enum {
 	RMNET_FLOW_MSG_WDA_FREQ = 7,
 	/* Change underlying transport channel */
 	RMNET_FLOW_MSG_CHANNEL_SWITCH = 8,
+	/* Add Queue mapping for legacy flow control */
+	RMNET_QUEUE_MAPPING_ADD = 9,
+	/*Remove Queue Mapping for legacy flow control*/
+	RMNET_QUEUE_MAPPING_REMOVE = 10,
+	/*Enable flow in legacy flow control*/
+	RMNET_QUEUE_ENABLE = 11,
+	/*Disable flow in legacy flow control*/
+	RMNET_QUEUE_DISABLE = 12,
+	/*Set legacy flow control*/
+	RMNET_QUEUE_SET_LEGACY_MODE = 13,
+};
+
+struct rmnet_queue_mapping {
+	uint8_t operation;
+	uint8_t txqueue;
+	uint16_t padding;
+	uint32_t mark;
 };
 
 /* 0 reserved, 1-15 for data, 16-30 for acks */
@@ -533,6 +550,47 @@ static int rmnet_fill_flow_msg(struct nlmsg *req, size_t *reqsize,
 
 	return RMNETCTL_SUCCESS;
 }
+
+static int queue_rmnet_fill_flow_msg(struct nlmsg *req, size_t *reqsize,
+                               unsigned int devindex, char *vndname,
+                               char *flowinfo, size_t flowlen)
+{
+        struct rtattr *linkinfo, *datainfo;
+        int rc;
+
+        /* Set up link attr with devindex as data */
+        rc = rta_put_u32(req, reqsize, IFLA_LINK, devindex);
+        if (rc != RMNETCTL_SUCCESS)
+                return rc;
+
+        rc = rta_put_string(req, reqsize, IFLA_IFNAME, vndname);
+        if (rc != RMNETCTL_SUCCESS)
+                return rc;
+
+        /* Set up IFLA info kind RMNET that has linkinfo and type */
+        rc = rta_nested_start(req, reqsize, IFLA_LINKINFO, &linkinfo);
+        if (rc != RMNETCTL_SUCCESS)
+                return rc;
+
+        rc = rta_put_string(req, reqsize, IFLA_INFO_KIND, "rmnet");
+        if (rc != RMNETCTL_SUCCESS)
+                return rc;
+
+        rc = rta_nested_start(req, reqsize, IFLA_INFO_DATA, &datainfo);
+        if (rc != RMNETCTL_SUCCESS)
+                return rc;
+
+        rc = rta_put(req, reqsize, RMNETCTL_IFLA_RMNET_QUEUE, flowlen,
+                     flowinfo);
+        if (rc != RMNETCTL_SUCCESS)
+                return rc;
+
+        rta_nested_end(req, datainfo);
+        rta_nested_end(req, linkinfo);
+
+        return RMNETCTL_SUCCESS;
+}
+
 
 /* @brief Synchronous method to receive messages to and from the kernel
  * using netlink sockets
@@ -1035,6 +1093,115 @@ int rtrmnet_set_ll_uplink_aggregation_params(rmnetctl_hndl_t *hndl,
 
 }
 
+int rtrmnet_set_legacy_mode(rmnetctl_hndl_t *hndl,
+                            char *devname,
+                            char *vndname,
+                            uint16_t *error_code)
+{
+	struct rmnet_queue_mapping flowinfo;
+	struct nlmsg req;
+	unsigned int devindex = 0;
+	size_t reqsize;
+	int rc;
+
+	memset(&req, 0, sizeof(req));
+	memset(&flowinfo, 0, sizeof(flowinfo));
+
+	if (!hndl || !devname || !error_code || _rmnetctl_check_dev_name(devname) ||
+		_rmnetctl_check_dev_name(vndname))
+		return RMNETCTL_INVALID_ARG;
+
+	reqsize = NLMSG_DATA_SIZE - sizeof(struct rtattr);
+	req.nl_addr.nlmsg_type = RTM_NEWLINK;
+	req.nl_addr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.nl_addr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nl_addr.nlmsg_seq = hndl->transaction_id;
+	hndl->transaction_id++;
+
+	/* Get index of devname*/
+	devindex = if_nametoindex(devname);
+	if (devindex == 0) {
+		*error_code = errno;
+		return RMNETCTL_KERNEL_ERR;
+	}
+
+	flowinfo.operation = RMNET_QUEUE_SET_LEGACY_MODE;
+	flowinfo.txqueue = 0;
+	flowinfo.padding = 0;
+	flowinfo.mark = 0;
+
+
+	rc = queue_rmnet_fill_flow_msg(&req, &reqsize, devindex, vndname,
+					 (char *)&flowinfo, sizeof(flowinfo));
+	if (rc != RMNETCTL_SUCCESS) {
+		*error_code = RMNETCTL_API_ERR_RTA_FAILURE;
+		return rc;
+	}
+
+	if (send(hndl->netlink_fd, &req, req.nl_addr.nlmsg_len, 0) < 0) {
+		*error_code = RMNETCTL_API_ERR_MESSAGE_SEND;
+		return RMNETCTL_LIB_ERR;
+	}
+
+	rc = rmnet_get_ack(hndl, error_code);
+	return rc;
+}
+
+int rtrmnet_add_flow_mapping(rmnetctl_hndl_t *hndl,
+			      char *devname,
+			      char *vndname,
+			      uint32_t flow_id,
+			      uint32_t tcm_handle,
+			      uint16_t *error_code)
+{
+	struct rmnet_queue_mapping flowinfo;
+	struct nlmsg req;
+	unsigned int devindex = 0;
+	size_t reqsize = 0;
+	int rc;
+
+	memset(&req, 0, sizeof(req));
+	memset(&flowinfo, 0, sizeof(flowinfo));
+
+	if (!hndl || !devname || !error_code ||_rmnetctl_check_dev_name(devname) ||
+		_rmnetctl_check_dev_name(vndname))
+		return RMNETCTL_INVALID_ARG;
+
+	reqsize = NLMSG_DATA_SIZE - sizeof(struct rtattr);
+	req.nl_addr.nlmsg_type = RTM_NEWLINK;
+	req.nl_addr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.nl_addr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nl_addr.nlmsg_seq = hndl->transaction_id;
+	hndl->transaction_id++;
+
+	/* Get index of devname*/
+	devindex = if_nametoindex(devname);
+	if (devindex == 0) {
+		*error_code = errno;
+		return RMNETCTL_KERNEL_ERR;
+	}
+
+	flowinfo.operation = RMNET_QUEUE_MAPPING_ADD;
+	flowinfo.txqueue = tcm_handle;
+	flowinfo.mark = flow_id;
+
+
+	rc = queue_rmnet_fill_flow_msg(&req, &reqsize, devindex, vndname,
+					 (char *)&flowinfo, sizeof(flowinfo));
+	if (rc != RMNETCTL_SUCCESS) {
+		*error_code = RMNETCTL_API_ERR_RTA_FAILURE;
+		return rc;
+	}
+
+	if (send(hndl->netlink_fd, &req, req.nl_addr.nlmsg_len, 0) < 0) {
+		*error_code = RMNETCTL_API_ERR_MESSAGE_SEND;
+		return RMNETCTL_LIB_ERR;
+	}
+
+	rc = rmnet_get_ack(hndl, error_code);
+	return rc;
+}
+
 int rtrmnet_activate_flow(rmnetctl_hndl_t *hndl,
 			  char *devname,
 			  char *vndname,
@@ -1093,6 +1260,165 @@ int rtrmnet_activate_flow(rmnetctl_hndl_t *hndl,
 	return rmnet_get_ack(hndl, error_code);
 }
 
+int rtrmnet_remove_flow_mapping(rmnetctl_hndl_t *hndl,
+				 char *devname,
+				 char *vndname,
+				 uint32_t flow_id,
+				 uint16_t *error_code)
+{
+	struct rmnet_queue_mapping flowinfo;
+	struct nlmsg req;
+	unsigned int devindex = 0;
+	size_t reqsize;
+	int rc;
+
+	memset(&req, 0, sizeof(req));
+	memset(&flowinfo, 0, sizeof(flowinfo));
+
+	if (!hndl || !devname || !error_code ||_rmnetctl_check_dev_name(devname) ||
+		_rmnetctl_check_dev_name(vndname))
+		return RMNETCTL_INVALID_ARG;
+
+	reqsize = NLMSG_DATA_SIZE - sizeof(struct rtattr);
+	req.nl_addr.nlmsg_type = RTM_NEWLINK;
+	req.nl_addr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.nl_addr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nl_addr.nlmsg_seq = hndl->transaction_id;
+	hndl->transaction_id++;
+
+	/* Get index of devname*/
+	devindex = if_nametoindex(devname);
+	if (devindex == 0) {
+		*error_code = errno;
+		return RMNETCTL_KERNEL_ERR;
+	}
+
+	flowinfo.operation = RMNET_QUEUE_MAPPING_REMOVE;
+	flowinfo.txqueue = 0;
+	flowinfo.mark = flow_id;
+
+
+	rc = queue_rmnet_fill_flow_msg(&req, &reqsize, devindex, vndname,
+					 (char *)&flowinfo, sizeof(flowinfo));
+	if (rc != RMNETCTL_SUCCESS) {
+		*error_code = RMNETCTL_API_ERR_RTA_FAILURE;
+		return rc;
+	}
+
+	if (send(hndl->netlink_fd, &req, req.nl_addr.nlmsg_len, 0) < 0) {
+		*error_code = RMNETCTL_API_ERR_MESSAGE_SEND;
+		return RMNETCTL_LIB_ERR;
+	}
+
+	rc = rmnet_get_ack(hndl, error_code);
+	return rc;
+}
+
+int rtrmnet_enable_legacy_flow_control(rmnetctl_hndl_t *hndl,
+					char *devname,
+					char *vndname,
+					uint32_t flow_id,
+					uint16_t *error_code)
+{
+	struct rmnet_queue_mapping flowinfo;
+	struct nlmsg req;
+	unsigned int devindex = 0;
+	size_t reqsize;
+	int rc;
+
+	memset(&req, 0, sizeof(req));
+	memset(&flowinfo, 0, sizeof(flowinfo));
+
+	if (!hndl || !devname || !error_code ||_rmnetctl_check_dev_name(devname) ||
+		_rmnetctl_check_dev_name(vndname))
+		return RMNETCTL_INVALID_ARG;
+
+	reqsize = NLMSG_DATA_SIZE - sizeof(struct rtattr);
+	req.nl_addr.nlmsg_type = RTM_NEWLINK;
+	req.nl_addr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.nl_addr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nl_addr.nlmsg_seq = hndl->transaction_id;
+	hndl->transaction_id++;
+
+	devindex = if_nametoindex(devname);
+	if (devindex == 0) {
+		*error_code = errno;
+		return RMNETCTL_KERNEL_ERR;
+	}
+
+	flowinfo.operation = RMNET_QUEUE_ENABLE;
+	flowinfo.txqueue = 0;
+	flowinfo.mark = flow_id;
+
+
+	rc = queue_rmnet_fill_flow_msg(&req, &reqsize, devindex, vndname,
+					 (char *)&flowinfo, sizeof(flowinfo));
+	if (rc != RMNETCTL_SUCCESS) {
+		*error_code = RMNETCTL_API_ERR_RTA_FAILURE;
+		return rc;
+	}
+
+	if (send(hndl->netlink_fd, &req, req.nl_addr.nlmsg_len, 0) < 0) {
+		*error_code = RMNETCTL_API_ERR_MESSAGE_SEND;
+		return RMNETCTL_LIB_ERR;
+	}
+
+	rc = rmnet_get_ack(hndl, error_code);
+	return rc;
+}
+
+int rtrmnet_disable_legacy_flow_control(rmnetctl_hndl_t *hndl,
+					 char *devname,
+					 char *vndname,
+					 uint32_t flow_id,
+					 uint16_t *error_code)
+{
+	struct rmnet_queue_mapping flowinfo;
+	struct nlmsg req;
+	unsigned int devindex = 0;
+	size_t reqsize;
+	int rc;
+
+	memset(&req, 0, sizeof(req));
+	memset(&flowinfo, 0, sizeof(flowinfo));
+
+	if (!hndl || !devname || !error_code ||_rmnetctl_check_dev_name(devname) ||
+		_rmnetctl_check_dev_name(vndname))
+		return RMNETCTL_INVALID_ARG;
+
+	reqsize = NLMSG_DATA_SIZE - sizeof(struct rtattr);
+	req.nl_addr.nlmsg_type = RTM_NEWLINK;
+	req.nl_addr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.nl_addr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nl_addr.nlmsg_seq = hndl->transaction_id;
+	hndl->transaction_id++;
+
+	devindex = if_nametoindex(devname);
+	if (devindex == 0) {
+		*error_code = errno;
+		return RMNETCTL_KERNEL_ERR;
+	}
+
+	flowinfo.operation = RMNET_QUEUE_DISABLE;
+	flowinfo.txqueue = 0;
+	flowinfo.mark = flow_id;
+
+
+	rc = queue_rmnet_fill_flow_msg(&req, &reqsize, devindex, vndname,
+					 (char *)&flowinfo, sizeof(flowinfo));
+	if (rc != RMNETCTL_SUCCESS) {
+		*error_code = RMNETCTL_API_ERR_RTA_FAILURE;
+		return rc;
+	}
+
+	if (send(hndl->netlink_fd, &req, req.nl_addr.nlmsg_len, 0) < 0) {
+		*error_code = RMNETCTL_API_ERR_MESSAGE_SEND;
+		return RMNETCTL_LIB_ERR;
+	}
+
+	rc = rmnet_get_ack(hndl, error_code);
+	return rc;
+}
 
 int rtrmnet_delete_flow(rmnetctl_hndl_t *hndl,
 			  char *devname,
