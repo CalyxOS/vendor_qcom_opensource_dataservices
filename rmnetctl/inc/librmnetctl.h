@@ -378,7 +378,35 @@ int rtrmnet_delete_flow(rmnetctl_hndl_t *hndl,
 			  int ip_type,
 			  uint16_t *error_code);
 
+int rtrmnet_set_legacy_mode(rmnetctl_hndl_t *hndl,
+                            char *devname,
+                            char *vndname,
+                            uint16_t *error_code);
 
+int rtrmnet_add_flow_mapping(rmnetctl_hndl_t *hndl,
+                              char *devname,
+                              char *vndname,
+                              uint32_t flow_id,
+                              uint32_t tcm_handle,
+                              uint16_t *error_code);
+
+int rtrmnet_enable_legacy_flow_control(rmnetctl_hndl_t *hndl,
+                                        char *devname,
+                                        char *vndname,
+                                        uint32_t flow_id,
+                                        uint16_t *error_code);
+
+int rtrmnet_disable_legacy_flow_control(rmnetctl_hndl_t *hndl,
+                                         char *devname,
+                                         char *vndname,
+                                         uint32_t flow_id,
+                                         uint16_t *error_code);
+
+int rtrmnet_remove_flow_mapping(rmnetctl_hndl_t *hndl,
+                                 char *devname,
+                                 char *vndname,
+                                 uint32_t flow_id,
+                                 uint16_t *error_code);
 
 
 int rtrmnet_control_flow(rmnetctl_hndl_t *hndl,
